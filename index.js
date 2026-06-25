@@ -33,14 +33,14 @@ async function generateDescription(title) {
 
 Produit : "${title}"
 
-Règles STRICTES (Google Merchant Center) :
-- Zéro promesse : pas de "parfait", "idéal", "garanti", "meilleur"
-- Zéro certification inventée : pas de CE, UL, RoHS sauf si dans le titre
-- Zéro superlatif : pas de "exceptionnel", "unique", "inégalé"
-- Uniquement des faits : matériaux, dimensions, culot, tension, usage
-- Phrases courtes et simples
+Règles STRICTES Google Merchant Center :
+- INTERDIT : "parfait", "idéal", "garanti", "meilleur", "exceptionnel", "unique", "inégalé", "luxe", "premium"
+- INTERDIT : certifications CE, UL, RoHS, CCC sauf si dans le titre original
+- INTERDIT : délais de livraison, prix, promotions
+- AUTORISÉ UNIQUEMENT : matériaux, dimensions, culot (E27/E14/GU10), tension (V), nombre de bras, couleur, type installation
+- Phrases courtes et factuelles uniquement
 
-Génère UNIQUEMENT ce HTML, sans texte avant ni après :
+Génère UNIQUEMENT ce HTML sans rien avant ni après :
 
 <style>
 .acc-wrap { max-width: 720px; margin: 0 auto; }
@@ -63,35 +63,24 @@ Génère UNIQUEMENT ce HTML, sans texte avant ni après :
 .color-dot { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; border: 1px solid #D4C5B0; }
 .color-list .color-desc { color: #BBB3A8; margin-left: auto; font-style: italic; font-size: 12.5px; }
 </style>
-
-<p><strong>[TITRE COURT FACTUEL EN MAJUSCULES]</strong> — [2 phrases factuelles : matériau, forme, culot, tension. Zéro promesse.]</p>
-
+<p><strong>[TITRE FACTUEL COURT EN MAJUSCULES]</strong> — [1-2 phrases : matériau, forme, culot, tension. Zéro promesse.]</p>
 <div class="acc-wrap">
-<input type="checkbox" id="specs-[ID]"> <label for="specs-[ID]">Spécifications techniques <span class="icon"></span></label>
-<div class="content">
-<ul class="spec-list">
-[4 à 6 lignes de specs réelles extraites du titre]
-</ul>
-</div>
-
-<input type="checkbox" id="coloris-[ID]"> <label for="coloris-[ID]">Guide des coloris <span class="icon"></span></label>
-<div class="content">
-<ul class="color-list">
+<input type="checkbox" id="specs-[SLUG]"> <label for="specs-[SLUG]">Spécifications techniques <span class="icon"></span></label>
+<div class="content"><ul class="spec-list">
+[4-6 specs réelles du produit format : <li><span class="spec-label">Label</span><span class="spec-value">Valeur</span></li>]
+</ul></div>
+<input type="checkbox" id="coloris-[SLUG]"> <label for="coloris-[SLUG]">Guide des coloris <span class="icon"></span></label>
+<div class="content"><ul class="color-list">
 <li><span class="color-dot" style="background-color: #fffbea;"></span><strong>Lumière froide 6000K</strong><span class="color-desc">Vive et nette</span></li>
-<li><span class="color-dot" style="background-color: #fff0cc;"></span><strong>Lumière chaude 3000K</strong><span class="color-desc">Atmosphère douce et apaisée</span></li>
-</ul>
-</div>
-
-<input type="checkbox" id="contenu-[ID]"> <label for="contenu-[ID]">Contenu du paquet <span class="icon"></span></label>
-<div class="content">
-<ul class="spec-list">
+<li><span class="color-dot" style="background-color: #fff8e1;"></span><strong>Lumière neutre 4500K</strong><span class="color-desc">Teinte équilibrée</span></li>
+<li><span class="color-dot" style="background-color: #fff0cc;"></span><strong>Lumière chaude 3000K</strong><span class="color-desc">Atmosphère douce</span></li>
+</ul></div>
+<input type="checkbox" id="contenu-[SLUG]"> <label for="contenu-[SLUG]">Contenu du paquet <span class="icon"></span></label>
+<div class="content"><ul class="spec-list">
 <li><span class="spec-label">Luminaire</span><span class="spec-value">1 unité</span></li>
 <li><span class="spec-label">Notice de montage</span><span class="spec-value">Incluse</span></li>
-</ul>
-</div>
-</div>
-
-Remplace [ID] par un slug court du produit (ex: lampe-boule). Adapte les specs au produit réel.`;
+</ul></div>
+</div>`;
 
   return await askClaude(prompt);
 }
@@ -107,31 +96,45 @@ async function updateShopifyProduct(productId, description) {
       product: { id: productId, body_html: description }
     })
   });
-  return res.json();
+  const data = await res.json();
+  if (data.errors) console.log('❌ Shopify erreur:', JSON.stringify(data.errors));
+  return data;
 }
 
 async function getAllProducts() {
-  const res = await fetch(`https://${SHOP}/admin/api/2024-01/products.json?limit=250`, {
-    headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN }
-  });
-  const data = await res.json();
-  return data.products;
+  try {
+    const res = await fetch(`https://${SHOP}/admin/api/2024-01/products.json?limit=250`, {
+      headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN }
+    });
+    const data = await res.json();
+    console.log('📋 Réponse Shopify:', JSON.stringify(data).substring(0, 200));
+    if (!data.products) {
+      console.log('❌ Pas de produits dans la réponse. Token invalide ?');
+      return [];
+    }
+    return data.products;
+  } catch (e) {
+    console.log('❌ Erreur getAllProducts:', e.message);
+    return [];
+  }
 }
 
-// Nouveau produit → description auto
 app.post('/webhook/product-created', async (req, res) => {
   res.sendStatus(200);
   const product = req.body;
-  console.log(`📦 Nouveau produit reçu: ${product.title}`);
+  console.log(`📦 Nouveau produit: ${product.title}`);
   const description = await generateDescription(product.title);
   await updateShopifyProduct(product.id, description);
-  console.log(`✅ Description mise à jour pour: ${product.title}`);
+  console.log(`✅ Mis à jour: ${product.title}`);
 });
 
-// Corriger TOUS les produits existants
 app.get('/fix-all-products', async (req, res) => {
   res.json({ message: '🔄 Correction en cours... Vérifie les logs Railway.' });
   const products = await getAllProducts();
+  if (!products || products.length === 0) {
+    console.log('❌ Aucun produit récupéré — vérifie le SHOPIFY_ACCESS_TOKEN');
+    return;
+  }
   console.log(`🚀 Début correction de ${products.length} produits...`);
   for (const product of products) {
     try {
@@ -144,7 +147,7 @@ app.get('/fix-all-products', async (req, res) => {
       console.log(`❌ Erreur: ${product.title} - ${e.message}`);
     }
   }
-  console.log('🎉 Tous les produits ont été corrigés !');
+  console.log('🎉 Terminé !');
 });
 
 app.post('/webhook/order-created', async (req, res) => {
@@ -157,7 +160,7 @@ Numéro : ${order.name} | Client : ${order.email} | Total : ${order.total_price}
 });
 
 app.get('/', (req, res) => {
-  res.json({ status: '✅ Serveur Shopify-Claude actif', version: '3.0' });
+  res.json({ status: '✅ Serveur Shopify-Claude actif', version: '4.0' });
 });
 
 const PORT = process.env.PORT || 3000;
