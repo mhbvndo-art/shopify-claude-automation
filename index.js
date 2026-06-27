@@ -40,27 +40,30 @@ Mots-clés luminaires français les plus recherchés (volume mensuel) :
 `;
 
 async function askClaude(prompt) {
- const res = await fetch('https://api.anthropic.com/v1/messages', {
-   method: 'POST',
-   headers: {
-     'Content-Type': 'application/json',
-     'x-api-key': ANTHROPIC_KEY,
-     'anthropic-version': '2023-06-01'
-   },
-   body: JSON.stringify({
-     model: 'claude-sonnet-4-6',
-     max_tokens: 2048,
-     messages: [{ role: 'user', content: prompt }]
-   })
- });
- const data = await res.json();
- return data.content[0].text;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2048,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+  const data = await res.json();
+  if (!data.content || !data.content[0]) {
+    throw new Error('Réponse Claude vide — crédits épuisés ?');
+  }
+  return data.content[0].text;
 }
 
 async function generateAll(title) {
- const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 20);
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 20);
 
- const descPrompt = `Tu es rédacteur e-commerce pour Lumora, boutique française de luminaires design.
+  const descPrompt = `Tu es rédacteur e-commerce pour Lumora, boutique française de luminaires design.
 
 Produit : "${title}"
 
@@ -112,125 +115,135 @@ Règles STRICTES Google Merchant Center :
 </ul></div>
 </div>`;
 
- const seoPrompt = `Tu es expert SEO e-commerce français pour Lumora, boutique de luminaires design.
+  const seoPrompt = `Tu es expert SEO e-commerce français pour Lumora, boutique de luminaires design.
 
 Produit : "${title}"
 
 ${KEYWORDS}
 
 Règles STRICTES :
-- INTERDIT absolument : "idéal", "idéale", "parfait", "garanti", "livraison", "expédition", "prix", "promotion", "meilleur", "luxe", "premium", "unique", "exceptionnel"
-- Titre SEO : maximum 60 caractères, commence par le mot-clé le plus pertinent et le plus recherché parmi la liste, finit par "| Lumora", 100% factuel
-- Meta description : maximum 155 caractères, intègre 2-3 mots-clés à fort volume pertinents pour ce produit, décrit matériaux + caractéristiques techniques, zéro promesse, zéro superlatif
-- Choisis les mots-clés avec le plus fort volume qui correspondent au produit
-- Réponds UNIQUEMENT en JSON valide sans backticks ni markdown :
+- INTERDIT : "idéal", "idéale", "parfait", "garanti", "livraison", "expédition", "prix", "promotion", "meilleur", "luxe", "premium", "unique", "exceptionnel"
+- Titre SEO : maximum 60 caractères, commence par le mot-clé le plus pertinent, finit par "| Lumora", 100% factuel
+- Meta description : maximum 155 caractères, 2-3 mots-clés à fort volume, matériaux + caractéristiques, zéro promesse
+- Réponds UNIQUEMENT en JSON valide sans backticks :
 {"seo_title":"...","meta_description":"..."}`;
 
- const [description, seoRaw] = await Promise.all([
-   askClaude(descPrompt),
-   askClaude(seoPrompt)
- ]);
+  const [description, seoRaw] = await Promise.all([
+    askClaude(descPrompt),
+    askClaude(seoPrompt)
+  ]);
 
- const cleanDesc = description
-   .replace(/^```html\s*/i, '')
-   .replace(/^```\s*/i, '')
-   .replace(/```\s*$/i, '')
-   .trim();
+  const cleanDesc = description
+    .replace(/^```html\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
 
- let seoTitle = title.substring(0, 55) + ' | Lumora';
- let metaDescription = '';
- try {
-   const seoData = JSON.parse(seoRaw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-   seoTitle = seoData.seo_title || seoTitle;
-   metaDescription = seoData.meta_description || '';
- } catch (e) {
-   console.log('⚠️ JSON SEO invalide pour:', title);
- }
+  let seoTitle = title.substring(0, 55) + ' | Lumora';
+  let metaDescription = '';
+  try {
+    const seoData = JSON.parse(seoRaw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+    seoTitle = seoData.seo_title || seoTitle;
+    metaDescription = seoData.meta_description || '';
+  } catch (e) {
+    console.log('⚠️ JSON SEO invalide pour:', title);
+  }
 
- return { description: cleanDesc, seoTitle, metaDescription };
+  return { description: cleanDesc, seoTitle, metaDescription };
 }
 
-async function updateShopifyProduct(productId, description, seoTitle, metaDescription) {
- const res = await fetch(`https://${SHOP}/admin/api/2024-01/products/${productId}.json`, {
-   method: 'PUT',
-   headers: {
-     'Content-Type': 'application/json',
-     'X-Shopify-Access-Token': SHOPIFY_TOKEN
-   },
-   body: JSON.stringify({
-     product: {
-       id: productId,
-       body_html: description,
-       metafields_global_title_tag: seoTitle,
-       metafields_global_description_tag: metaDescription
-     }
-   })
- });
- const data = await res.json();
- if (data.errors) console.log('❌ Shopify erreur:', JSON.stringify(data.errors));
- return data;
+async function updateShopifyProduct(productId, description, seoTitle, metaDescription, existingTags) {
+  const tags = existingTags
+    ? existingTags.split(',').map(t => t.trim()).filter(t => t !== 'lumora-fixed').concat('lumora-fixed').join(', ')
+    : 'lumora-fixed';
+
+  const res = await fetch(`https://${SHOP}/admin/api/2024-01/products/${productId}.json`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Shopify-Access-Token': SHOPIFY_TOKEN
+    },
+    body: JSON.stringify({
+      product: {
+        id: productId,
+        body_html: description,
+        metafields_global_title_tag: seoTitle,
+        metafields_global_description_tag: metaDescription,
+        tags: tags
+      }
+    })
+  });
+  const data = await res.json();
+  if (data.errors) console.log('❌ Shopify erreur:', JSON.stringify(data.errors));
+  return data;
 }
 
 async function getAllProducts() {
- try {
-   const res = await fetch(`https://${SHOP}/admin/api/2024-01/products.json?limit=250`, {
-     headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN }
-   });
-   const data = await res.json();
-   console.log('📋 Réponse Shopify:', JSON.stringify(data).substring(0, 200));
-   if (!data.products) {
-     console.log('❌ Pas de produits. Token invalide ?');
-     return [];
-   }
-   return data.products;
- } catch (e) {
-   console.log('❌ Erreur getAllProducts:', e.message);
-   return [];
- }
+  try {
+    const res = await fetch(`https://${SHOP}/admin/api/2024-01/products.json?limit=250`, {
+      headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN }
+    });
+    const data = await res.json();
+    if (!data.products) {
+      console.log('❌ Pas de produits. Token invalide ?');
+      return [];
+    }
+    return data.products;
+  } catch (e) {
+    console.log('❌ Erreur getAllProducts:', e.message);
+    return [];
+  }
 }
 
 app.post('/webhook/product-created', async (req, res) => {
- res.sendStatus(200);
- const product = req.body;
- console.log(`📦 Nouveau produit: ${product.title}`);
- const { description, seoTitle, metaDescription } = await generateAll(product.title);
- await updateShopifyProduct(product.id, description, seoTitle, metaDescription);
- console.log(`✅ Mis à jour: ${product.title}`);
+  res.sendStatus(200);
+  const product = req.body;
+  console.log(`📦 Nouveau produit: ${product.title}`);
+  const { description, seoTitle, metaDescription } = await generateAll(product.title);
+  await updateShopifyProduct(product.id, description, seoTitle, metaDescription, product.tags);
+  console.log(`✅ Mis à jour: ${product.title}`);
 });
 
 app.get('/fix-all-products', async (req, res) => {
- res.json({ message: '🔄 Correction en cours... Vérifie les logs Railway.' });
- const products = await getAllProducts();
- if (!products || products.length === 0) {
-   console.log('❌ Aucun produit récupéré');
-   return;
- }
- console.log(`🚀 Début correction de ${products.length} produits...`);
- for (const product of products) {
-   try {
-     console.log(`⏳ Traitement: ${product.title}`);
-     const { description, seoTitle, metaDescription } = await generateAll(product.title);
-     await updateShopifyProduct(product.id, description, seoTitle, metaDescription);
-     console.log(`✅ OK: ${product.title}`);
-     await new Promise(r => setTimeout(r, 3000));
-   } catch (e) {
-     console.log(`❌ Erreur: ${product.title} - ${e.message}`);
-   }
- }
- console.log('🎉 Terminé !');
+  res.json({ message: '🔄 Correction en cours... Vérifie les logs Railway.' });
+  const products = await getAllProducts();
+  if (!products || products.length === 0) {
+    console.log('❌ Aucun produit récupéré');
+    return;
+  }
+
+  const toFix = products.filter(p => {
+    const tags = p.tags ? p.tags.split(',').map(t => t.trim()) : [];
+    return !tags.includes('lumora-fixed');
+  });
+
+  console.log(`🚀 ${toFix.length} produits à traiter (${products.length - toFix.length} déjà fixés)`);
+
+  for (const product of toFix) {
+    try {
+      console.log(`⏳ Traitement: ${product.title}`);
+      const { description, seoTitle, metaDescription } = await generateAll(product.title);
+      await updateShopifyProduct(product.id, description, seoTitle, metaDescription, product.tags);
+      console.log(`✅ OK: ${product.title}`);
+      await new Promise(r => setTimeout(r, 3000));
+    } catch (e) {
+      console.log(`❌ Erreur: ${product.title} - ${e.message}`);
+    }
+  }
+  console.log('🎉 Terminé !');
 });
 
 app.post('/webhook/order-created', async (req, res) => {
- res.sendStatus(200);
- const order = req.body;
- const prompt = `Résume cette commande en 5 lignes pour le gérant de Lumora :
+  res.sendStatus(200);
+  const order = req.body;
+  const prompt = `Résume cette commande en 5 lignes pour le gérant de Lumora :
 Numéro : ${order.name} | Client : ${order.email} | Total : ${order.total_price} ${order.currency} | Articles : ${order.line_items?.map(i => i.title).join(', ')}`;
- const result = await askClaude(prompt);
- console.log(`🛒 Commande ${order.name}:\n${result}`);
+  const result = await askClaude(prompt);
+  console.log(`🛒 Commande ${order.name}:\n${result}`);
 });
 
 app.get('/', (req, res) => {
- res.json({ status: '✅ Serveur Shopify-Claude actif', version: '6.0' });
+  res.json({ status: '✅ Serveur Shopify-Claude actif', version: '7.0' });
 });
 
 const PORT = process.env.PORT || 3000;
